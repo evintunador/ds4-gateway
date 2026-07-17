@@ -16,6 +16,8 @@ never as part of a deploy — a bad flip must not become the boot default.
 
 import argparse
 import json
+import os
+import signal
 import subprocess
 import sys
 import time
@@ -136,7 +138,16 @@ def main():
 
     # 5. retire old gateway (keeps the model running)
     if old_port:
-        post(old_port, "/admin/shutdown", {"keep_model": True})
+        try:
+            post(old_port, "/admin/shutdown", {"keep_model": True})
+        except (urllib.error.URLError, OSError) as e:
+            # pre-stage2 gateway or wedged process: SIGKILL by port so its
+            # cleanup can't take the model down with it
+            print(f"graceful shutdown refused ({e}); force-killing :{old_port}")
+            pids = subprocess.run(["lsof", "-ti", f"tcp:{old_port}"],
+                                  capture_output=True, text=True).stdout.split()
+            for pid in pids:
+                os.kill(int(pid), signal.SIGKILL)
         deadline = time.time() + 90
         while time.time() < deadline and status_of(old_port):
             time.sleep(1)
