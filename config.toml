@@ -21,7 +21,14 @@ model_file = "ds4flash.gguf"
 host = "127.0.0.1"
 port = 8001          # red = 8001, yellow = 8002
 alt_port = 8002
-args = ["--metal", "--ctx", "100000"]
+args = [
+    "--metal", "--ctx", "100000",
+    # disk KV checkpoints: evicted conversation prefixes restore from SSD
+    # instead of re-prefilling. NOTE: conversation-derived state on disk —
+    # purge by deleting the kv-* dirs (see docs/OPERATIONS.md).
+    "--kv-disk-dir", "/Users/evintunador/.local/state/ds4-gateway/kv-{port}",
+    "--kv-disk-space-mb", "262144",   # 256GB
+]
 # phase-1 stopgap instance during a swap: must fit beside the resident model
 swap_streaming_args = ["--ssd-streaming", "--ssd-streaming-cache-experts", "24GB"]
 managed = true       # gateway owns the ds4-server process lifecycle

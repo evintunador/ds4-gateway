@@ -98,6 +98,16 @@ ts.net URL, tailscale serve overwrites the header and all traffic becomes
 "you". Keep rates gentle against the real model (it is serial); the mock
 backend (`tests/mock_backend.py`) is the right target for high-rate runs.
 
+## KV disk cache
+
+Enabled via `--kv-disk-dir` in `[model].args` (256GB budget, per-port dirs
+under the state dir so swap-overlapping instances never share one). To purge
+all conversation-derived state from disk:
+
+```sh
+bin/ds4ctl off && rm -rf ~/.local/state/ds4-gateway/kv-* && bin/ds4ctl on
+```
+
 ## Emergency stops
 
 ```sh

@@ -44,7 +44,9 @@ class ModelProcess:
         self.model_file = model_file
         self.host = host
         self.port = port
-        self.args = list(args)
+        # "{port}" in args resolves per-instance so red/yellow overlap never
+        # shares stateful paths (e.g. --kv-disk-dir)
+        self.args = [str(a).replace("{port}", str(port)) for a in args]
         self.health_timeout = health_timeout_s
         self.log_file = log_file
         self.run_dir = run_dir

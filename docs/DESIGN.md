@@ -121,10 +121,12 @@ surprise-reload the model.
 
 ## Data retention (owner's explicit requirement)
 
-Conversation content is NEVER persisted. It exists only in ds4-server's
-in-RAM KV cache (overwritten as conversations interleave, gone at process
-exit). Enforced by construction: the proxy never logs bodies; ds4-server's
-`--trace` and `--kv-disk-dir` flags are never passed. The usage log
+Conversation content is never written to disk as text: the proxy never logs
+bodies and ds4-server's `--trace` flag is never passed. One deliberate
+exception (owner-approved 2026-07-17): `--kv-disk-dir` persists KV
+checkpoints — conversation-DERIVED model state, not plaintext — to
+`state_dir/kv-<port>/` (256GB budget) so evicted prefixes restore from SSD
+instead of re-prefilling. Purge at any time by deleting those dirs. The usage log
 (state_dir/usage.jsonl) records only user, timestamps, status, timings, and
 token counts — the e2e suite asserts no content leaks into it. Streamed
 responses omit `usage`, so their completion tokens are estimated from SSE
