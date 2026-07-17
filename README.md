@@ -58,10 +58,10 @@ Power states can be simulated on a live gateway via
 
 ## Roadmap
 
-- Stage 2: versioned releases, blue/green gateway switch (re-point
-  `tailscale serve`), red/yellow model swap via two-phase `--ssd-streaming`.
-- Stage 3: LaunchDaemon (written but not loaded until proven), `pmset -c sleep 0`,
-  memory watchdog.
+- ~~Stage 2~~ done: versioned releases, blue/green gateway deploys, red/yellow
+  model swaps (`ds4ctl deploy / swap-model / promote`).
+- Stage 3: LaunchDaemon (written but not loaded until proven), memory watchdog.
+- Backlog: runtime & memory benchmark suite.
 - Stage 4: generalize for other operators — strip anything specific to this
   machine/owner into config + setup docs, so anyone can deploy this in front
   of their own ds4-server.

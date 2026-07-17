@@ -70,6 +70,28 @@ surprise-reload the model.
   re-pointing `tailscale serve`). The model layer is untouched during a
   gateway flip.
 
+## How the switches work (stage 2)
+
+- **Model survives gateway swaps.** ds4-server is spawned with
+  `start_new_session=True` and a pidfile under the shared state dir
+  (`[gateway].state_dir`, outside any release checkout). A starting gateway
+  first tries to ADOPT a healthy running model (pidfile, then a `pgrep`
+  fallback) before ever spawning one — that is the invariant that makes
+  blue/green possible with an 81GB model. Old gateways exit via
+  `/admin/shutdown {"keep_model": true}`, which drains the queue and skips
+  the model-kill in cleanup.
+- **The blue/green traffic flip is `tailscale serve --bg <port>`** — atomic
+  at the front door. During the overlap window both gateways may briefly
+  forward to the one serial backend (concurrency 2 instead of 1);
+  ds4-server queues internally, so this is harmless.
+- **Red/yellow flips take a scheduler-exclusive turn** (a `__swap__`
+  pseudo-user acquires the serial slot), so no request ever straddles a
+  backend switch — the lifecycle test asserts zero drops under load.
+- **Swaps re-read config.toml at start**: edit the model file/args/binary
+  first, then `ds4ctl swap-model`.
+- `state.json` also records the live model port so an adopting gateway finds
+  the model even when a past swap left it on the alt port.
+
 ## v2 roadmap notes (owner-confirmed facts)
 
 - Continuous batching in the engine: batch>1 slows MoE but does **not**

@@ -26,7 +26,7 @@ CONFIG = f"""
 [gateway]
 host = "127.0.0.1"
 port = {GW_PORT}
-state_file = "{{state_file}}"
+state_dir = "{{state_dir}}"
 
 [owner]
 login = "{OWNER}"
@@ -185,7 +185,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="ds4gw-test-")
     cfg_path = os.path.join(tmp, "config.toml")
     with open(cfg_path, "w") as f:
-        f.write(CONFIG.format(state_file=os.path.join(tmp, "state.json"),
+        f.write(CONFIG.format(state_dir=tmp,
                               log_file=os.path.join(tmp, "ds4.log")))
     mock = subprocess.Popen([sys.executable, os.path.join(HERE, "mock_backend.py"),
                              "--port", str(MOCK_PORT)])

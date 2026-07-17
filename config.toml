@@ -3,7 +3,9 @@
 [gateway]
 host = "127.0.0.1"   # only tailscale serve / local processes can reach it
 port = 9001          # blue = 9001, green = 9002
-state_file = "state.json"
+alt_port = 9002
+# shared across releases/colors: state.json + model pidfiles live here
+state_dir = "~/.local/state/ds4-gateway"
 
 [owner]
 login = "evintunador@github"   # tailscale login; always bypasses the power gate
@@ -18,7 +20,10 @@ server_bin = "./ds4-server"
 model_file = "ds4flash.gguf"
 host = "127.0.0.1"
 port = 8001          # red = 8001, yellow = 8002
+alt_port = 8002
 args = ["--metal", "--ctx", "100000"]
+# phase-1 stopgap instance during a swap: must fit beside the resident model
+swap_streaming_args = ["--ssd-streaming", "--ssd-streaming-cache-experts", "24GB"]
 managed = true       # gateway owns the ds4-server process lifecycle
 autostart = true     # load the model when the gateway starts (unless disabled state persisted)
 health_timeout_s = 1800
@@ -32,3 +37,6 @@ queue_timeout_s = 600
 
 [scheduler.weights]
 "evintunador@github" = 4
+
+[deploy]
+root = "~/dev/ds4-gateway-deploy"   # releases/, live and current symlinks

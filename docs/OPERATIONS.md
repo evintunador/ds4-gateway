@@ -44,6 +44,20 @@ bin/ds4ctl on             # reload now (takes a bit; first requests page weights
    `config.toml` (key = their tailscale login, e.g. `"alice@github" = 2`)
    and restart the gateway.
 
+## Deploys and swaps (stage 2)
+
+```sh
+bin/ds4ctl deploy          # blue/green: ship committed HEAD to the inactive color
+bin/ds4ctl deploy --release ~/dev/ds4-gateway-deploy/releases/<dir>   # rollback
+bin/ds4ctl swap-model      # red/yellow: two-phase model swap (edit config.toml first)
+bin/ds4ctl promote         # make the live release the boot version (manual by design)
+```
+
+Release layout under `~/dev/ds4-gateway-deploy/`: `releases/<ts>-<sha>/`
+(full checkouts with their own venvs), `live` -> what serves traffic now,
+`current` -> what the LaunchDaemon will boot (moves ONLY on promote).
+A deploy that fails health checks leaves the old gateway untouched.
+
 ## Simulating conditions on a live gateway
 
 ```sh

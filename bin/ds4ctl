@@ -5,6 +5,9 @@
   ds4ctl on                     re-enable and reload the model
   ds4ctl off                    stop the model server, free the RAM
   ds4ctl off --for 2h           ...and auto-relaunch after 2h (also: 90m, 1h30m, 45s)
+  ds4ctl swap-model             red/yellow model swap (edit config.toml first)
+  ds4ctl deploy [...]           blue/green gateway deploy (tools/deploy.py)
+  ds4ctl promote                make the live release the boot version
 
 Talks to the gateway admin API on localhost. Uses port 9001 (blue) by
 default, falling back to 9002 (green); override with --port or DS4CTL_PORT.
@@ -67,6 +70,8 @@ def print_status(s: dict):
             mins = (b["disabled_until"] - time.time()) / 60
             line += f" (auto-on in {mins:.0f}m)"
     print(line + f"  -> {b['base_url']}")
+    if b.get("swap_state"):
+        print(f"swap       {b['swap_state']}")
     sched = s["scheduler"]
     queued = ", ".join(f"{u}:{n}" for u, n in sched["queued"].items()) or "empty"
     print(f"scheduler  busy: {sched['busy_user'] or 'idle'}  queued: {queued}")
@@ -81,7 +86,17 @@ def main():
     off = sub.add_parser("off")
     off.add_argument("--for", dest="duration", default=None,
                      help="auto re-enable after this long (2h, 90m, 1h30m)")
+    sub.add_parser("swap-model")
+    dep = sub.add_parser("deploy")
+    dep.add_argument("extra", nargs="*", help="passed through to tools/deploy.py")
+    sub.add_parser("promote")
     args = ap.parse_args()
+
+    repo = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    if args.cmd in ("deploy", "promote"):
+        extra = ["--promote"] if args.cmd == "promote" else args.extra
+        os.execvp("uv", ["uv", "run", "--project", repo, "python",
+                         os.path.join(repo, "tools", "deploy.py"), *extra])
 
     port, status = find_port(args.port)
     if args.cmd == "status":
@@ -99,6 +114,22 @@ def main():
         print("model stopped, RAM freed"
               + (f"; auto-relaunch at {time.strftime('%H:%M', time.localtime(until))}"
                  if until else ""))
+    elif args.cmd == "swap-model":
+        call(port, "POST", "/admin/model_swap")
+        print("swap started (config.toml re-read); watching...")
+        last = None
+        while True:
+            time.sleep(2)
+            b = call(port, "GET", "/admin/status")["backend"]
+            state = b.get("swap_state")
+            if state != last and state:
+                print(f"  {state}")
+                last = state
+            if state is None:
+                print(f"swap complete; model on :{b['port']} pid {b['pid']}")
+                break
+            if state.startswith("FAILED"):
+                sys.exit(f"swap failed: {state}")
 
 
 if __name__ == "__main__":
