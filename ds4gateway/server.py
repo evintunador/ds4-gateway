@@ -58,7 +58,8 @@ class Gateway:
             self,
             interval_s=cfg.get("watchdog", "interval_s", default=30),
             gateway_rss_mb=cfg.get("watchdog", "gateway_rss_mb", default=2048),
-            model_rss_mb=cfg.get("watchdog", "model_rss_mb", default=115000),
+            model_footprint_mb=cfg.get("watchdog", "model_footprint_mb",
+                                       default=60000),
         )
         self.usage = UsageLog(
             run_dir / "usage.jsonl",

@@ -46,5 +46,7 @@ enabled = true   # content-free usage log (tokens/timings only) in state_dir/usa
 
 [watchdog]
 interval_s = 30
-gateway_rss_mb = 2048     # gateway over this -> exit (launchd restarts, throttled)
-model_rss_mb = 115000     # ~112GB; model over this -> stop + disable, ds4ctl on to recover
+gateway_rss_mb = 2048        # gateway over this -> exit (launchd restarts, throttled)
+# model DIRTY footprint (KV/buffers/leaks; mmap'd weights are clean pages and
+# don't count) -> stop + disable, ds4ctl on to recover. Healthy: ~6GB.
+model_footprint_mb = 60000

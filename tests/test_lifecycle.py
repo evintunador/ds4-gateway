@@ -180,7 +180,7 @@ async def run_tests(cfg_path, state_dir, procs):
                     .replace(f"port = {GW1}", f"port = {GW3}", 1)
                     .replace(f"port = {M_RED}", f"port = {M_WD}", 1)
                     .replace(f"alt_port = {M_YEL}", f"alt_port = {M_WD + 1}", 1)
-                    + "\n[watchdog]\ninterval_s = 1\nmodel_rss_mb = 1\n")
+                    + "\n[watchdog]\ninterval_s = 1\nmodel_footprint_mb = 1\n")
         gw3 = subprocess.Popen([sys.executable, "-m", "ds4gateway",
                                 "--config", wd_cfg], cwd=ROOT)
         procs.append(gw3)

@@ -34,13 +34,10 @@ def make_prompt(n_tokens: int, nonce: str) -> str:
             "short sentence.")
 
 
-def rss_mb(pid):
-    try:
-        out = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)],
-                             capture_output=True, text=True).stdout.strip()
-        return round(int(out) / 1024) if out else None
-    except (ValueError, OSError):
-        return None
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from ds4gateway.watchdog import footprint_mb  # noqa: E402
 
 
 async def run_once(s, base, prompt, max_tokens, stream):
@@ -70,11 +67,13 @@ async def run_once(s, base, prompt, max_tokens, stream):
 
 
 async def main_async(args):
+    # cached runs immediately after medium: ds4-server keeps ONE KV prefix
+    # checkpoint, so any scenario in between would evict it
     scenarios = [
         ("short 64/64", 64, 64),
         ("medium 1k/128", 1000, 128),
-        ("long 8k/128", 8000, 128),
     ]
+    late_scenarios = [("long 8k/128", 8000, 128)]
     results = {"t": time.time(), "scenarios": {}}
     timeout = aiohttp.ClientTimeout(total=args.timeout)
     async with aiohttp.ClientSession(timeout=timeout) as s:
@@ -82,14 +81,11 @@ async def main_async(args):
             st = await r.json()
         model_pid = st["backend"]["pid"]
         state_dir = st.get("state_dir")
-        results["rss_before_mb"] = rss_mb(model_pid)
+        results["footprint_before_mb"] = footprint_mb(model_pid)
         results["backend"] = st["backend"]["base_url"]
 
-        cached_prompt = None
-        for name, ptok, mtok in scenarios:
-            prompt = make_prompt(ptok, nonce=f"bench{random.randrange(1e9)}")
-            if ptok == 1000:
-                cached_prompt = prompt
+        async def run_scenario(name, ptok, mtok):
+            prompt = make_prompt(ptok, nonce=f"bench{random.randrange(10**9)}")
             exact = await run_once(s, args.base_url, prompt, mtok, stream=False)
             streamed = await run_once(s, args.base_url, prompt + " (again)",
                                       mtok, stream=True)
@@ -99,9 +95,15 @@ async def main_async(args):
             print(f"{name:<16} prompt={exact['prompt_tokens']:>5} tok  "
                   f"total={exact['latency_s']:.2f}s  "
                   f"ttft={streamed['ttft_s']:.2f}s  decode={decode} tok/s")
+            return prompt
 
-        # cached: identical 1k prompt again — prefix cache should crush TTFT
-        c = await run_once(s, args.base_url, cached_prompt, 128, stream=True)
+        for name, ptok, mtok in scenarios:
+            cached_prompt = await run_scenario(name, ptok, mtok)
+
+        # cached: the streamed "(again)" variant of the 1k prompt just ran, so
+        # re-sending it exactly should hit the KV prefix checkpoint
+        c = await run_once(s, args.base_url, cached_prompt + " (again)",
+                           128, stream=True)
         results["scenarios"]["cached 1k/128"] = {"streamed": c}
         d = c["decode_tok_s"]
         decode = f"{d:.1f}" if d else "?"
@@ -109,9 +111,12 @@ async def main_async(args):
               f"total={c['latency_s']:.2f}s  ttft={c['ttft_s']:.2f}s  "
               f"decode={decode} tok/s")
 
-        results["rss_after_mb"] = rss_mb(model_pid)
-        print(f"model rss: {results['rss_before_mb']} -> "
-              f"{results['rss_after_mb']} MB")
+        for name, ptok, mtok in late_scenarios:
+            await run_scenario(name, ptok, mtok)
+
+        results["footprint_after_mb"] = footprint_mb(model_pid)
+        print(f"model footprint: {results['footprint_before_mb']:.0f} -> "
+              f"{results['footprint_after_mb']:.0f} MB")
 
     if state_dir:
         out = Path(state_dir) / "benchmarks"

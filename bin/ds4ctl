@@ -155,8 +155,7 @@ def main():
     off.add_argument("--for", dest="duration", default=None,
                      help="auto re-enable after this long (2h, 90m, 1h30m)")
     sub.add_parser("swap-model")
-    dep = sub.add_parser("deploy")
-    dep.add_argument("extra", nargs="*", help="passed through to tools/deploy.py")
+    sub.add_parser("deploy")  # extra args pass through to tools/deploy.py
     sub.add_parser("promote")
     sub.add_parser("install-daemon")
     stats = sub.add_parser("stats")
@@ -165,14 +164,15 @@ def main():
     wts.add_argument("login", nargs="?")
     wts.add_argument("weight", nargs="?", type=float)
     wts.add_argument("--clear", action="store_true")
-    bench = sub.add_parser("bench")
-    bench.add_argument("extra", nargs="*", help="passed through to tools/bench.py")
-    args = ap.parse_args()
+    sub.add_parser("bench")  # extra args pass through to tools/bench.py
+    args, extra = ap.parse_known_args()
+    if extra and args.cmd not in ("deploy", "bench"):
+        ap.error(f"unrecognized arguments: {' '.join(extra)}")
 
     repo = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
     if args.cmd == "bench":
         os.execvp("uv", ["uv", "run", "--project", repo, "python",
-                         os.path.join(repo, "tools", "bench.py"), *args.extra])
+                         os.path.join(repo, "tools", "bench.py"), *extra])
     if args.cmd == "install-daemon":
         plist = os.path.join(repo, "launchd", "com.evintunador.ds4-gateway.plist")
         print("The daemon is NOT installed automatically. Preconditions:")
@@ -186,7 +186,8 @@ def main():
         print("  sudo rm /Library/LaunchDaemons/com.evintunador.ds4-gateway.plist")
         return
     if args.cmd in ("deploy", "promote"):
-        extra = ["--promote"] if args.cmd == "promote" else args.extra
+        if args.cmd == "promote":
+            extra = ["--promote"]
         os.execvp("uv", ["uv", "run", "--project", repo, "python",
                          os.path.join(repo, "tools", "deploy.py"), *extra])
 
