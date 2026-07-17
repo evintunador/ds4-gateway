@@ -200,7 +200,8 @@ async def run_tests(cfg_path, state_dir, procs):
             await asyncio.sleep(0.5)
         check("watchdog disabled over-limit model", tripped, st3)
         check("watchdog event recorded",
-              tripped and any("rss" in e["msg"] for e in st3["watchdog"]["events"]),
+              tripped and any("footprint" in e["msg"]
+                              for e in st3["watchdog"]["events"]),
               st3 and st3.get("watchdog"))
         await asyncio.sleep(1.5)
         model_up = True
