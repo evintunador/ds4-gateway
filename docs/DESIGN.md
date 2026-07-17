@@ -96,6 +96,19 @@ surprise-reload the model.
 - `state.json` also records the live model port so an adopting gateway finds
   the model even when a past swap left it on the alt port.
 
+## Boot and self-protection (stage 3)
+
+- The LaunchDaemon executes `deploy-root/current/tools/boot.sh` — through
+  the promote-gated symlink, so deploys/swaps NEVER change what boots.
+  Boot is deterministic: blue slot :9001, serve re-pointed to match,
+  whatever color was live pre-reboot.
+- KeepAlive only on crash + 5-minute throttle: the owner's explicit fear is
+  a bad build hot-looping an 81GB model load at startup.
+- Watchdog (in-gateway): model RSS over `[watchdog].model_rss_mb` -> stop +
+  persistent disable (recover with `ds4ctl on`); gateway RSS over its limit
+  -> exit(70). The watchdog can fire while the model is still loading —
+  that is intentional (runaway load) and the lifecycle test covers it.
+
 ## v2 roadmap notes (owner-confirmed facts)
 
 - Continuous batching in the engine: batch>1 slows MoE but does **not**

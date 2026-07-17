@@ -9,14 +9,19 @@
 | tailscale serve | `https://<machine>.<tailnet>.ts.net` → :9001 | persists across reboots on its own |
 | logs | `logs/gateway.log`, `logs/ds4-server.log` | |
 
-**After a reboot** (until the stage-3 LaunchDaemon lands):
+**After a reboot** — if the LaunchDaemon is installed, nothing: it runs
+`current/tools/boot.sh`, which starts the promoted release in the blue slot
+(:9001) and re-points tailscale serve at it. Until the daemon is installed
+(`ds4ctl install-daemon` prints the sudo commands; it is deliberately never
+installed automatically), start manually:
 
 ```sh
-cd ~/dev/ds4-gateway && mkdir -p logs && \
-  nohup uv run python -m ds4gateway --config config.toml > logs/gateway.log 2>&1 &
+~/dev/ds4-gateway-deploy/current/tools/boot.sh   # or from the repo checkout
 ```
 
-Tailscale serve does not need re-running. Check with `bin/ds4ctl status`.
+Check with `bin/ds4ctl status`. Note the daemon restarts a crashed gateway at
+most every 5 minutes (ThrottleInterval) and only on crash — a clean watchdog
+exit or `launchctl bootout` stays down.
 
 ## Sleep settings
 

@@ -21,8 +21,8 @@ import aiohttp
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-GW1, GW2 = 19003, 19004
-M_RED, M_YEL = 18011, 18012
+GW1, GW2, GW3 = 19003, 19004, 19005
+M_RED, M_YEL, M_WD = 18011, 18012, 18021
 
 CONFIG = f"""
 [gateway]
@@ -92,7 +92,7 @@ async def wait_backend_running(s, port=GW1, timeout=30):
     raise RuntimeError(f"gateway :{port} backend never running")
 
 
-async def run_tests(cfg_path, state_dir):
+async def run_tests(cfg_path, state_dir, procs):
     async with aiohttp.ClientSession() as s:
         print("== managed spawn ==")
         st = await wait_backend_running(s)
@@ -148,6 +148,7 @@ async def run_tests(cfg_path, state_dir):
         gw2 = subprocess.Popen(
             [sys.executable, "-m", "ds4gateway", "--config", cfg_path,
              "--port", str(GW2), "--color", "green"], cwd=ROOT)
+        procs.append(gw2)
         st2 = await wait_backend_running(s, GW2)
         check("green adopted (same model pid, no respawn)",
               st2["backend"]["pid"] == pid_before and st2["color"] == "green", st2["backend"])
@@ -171,6 +172,45 @@ async def run_tests(cfg_path, state_dir):
         check("model survived handoff",
               code == 200 and st2["backend"]["pid"] == pid_before, st2["backend"])
 
+        print("== watchdog ==")
+        wd_dir = tempfile.mkdtemp(prefix="ds4gw-watchdog-")
+        wd_cfg = os.path.join(wd_dir, "config.toml")
+        with open(wd_cfg, "w") as f:
+            f.write(CONFIG.format(state_dir=wd_dir)
+                    .replace(f"port = {GW1}", f"port = {GW3}", 1)
+                    .replace(f"port = {M_RED}", f"port = {M_WD}", 1)
+                    .replace(f"alt_port = {M_YEL}", f"alt_port = {M_WD + 1}", 1)
+                    + "\n[watchdog]\ninterval_s = 1\nmodel_rss_mb = 1\n")
+        gw3 = subprocess.Popen([sys.executable, "-m", "ds4gateway",
+                                "--config", wd_cfg], cwd=ROOT)
+        procs.append(gw3)
+        # the watchdog may trip while the model is still "starting" (any RSS
+        # beats a 1MB limit), so wait directly for the disabled outcome
+        st3 = None
+        deadline = time.time() + 25
+        tripped = False
+        while time.time() < deadline:
+            try:
+                st3 = await status(s, GW3)
+                if st3["backend"]["disabled"]:
+                    tripped = True
+                    break
+            except aiohttp.ClientError:
+                pass
+            await asyncio.sleep(0.5)
+        check("watchdog disabled over-limit model", tripped, st3)
+        check("watchdog event recorded",
+              tripped and any("rss" in e["msg"] for e in st3["watchdog"]["events"]),
+              st3 and st3.get("watchdog"))
+        await asyncio.sleep(1.5)
+        model_up = True
+        try:
+            async with s.get(f"http://127.0.0.1:{M_WD}/v1/models"):
+                pass
+        except aiohttp.ClientError:
+            model_up = False
+        check("over-limit model actually stopped", not model_up)
+
         print("== off/on through adopting gateway ==")
         async with s.post(f"http://127.0.0.1:{GW2}/admin/off") as r:
             check("off via green", r.status == 200, r.status)
@@ -180,8 +220,6 @@ async def run_tests(cfg_path, state_dir):
             check("on via green", r.status == 200, r.status)
         code, _ = await chat(s, GW2)
         check("respawned and serving", code == 200, code)
-
-        return gw2
 
 
 def pid_alive(pid):
@@ -218,11 +256,11 @@ def main():
     env = {**os.environ, "FAKE_DS4_STARTUP_DELAY": "0.5"}
     gw1 = subprocess.Popen([sys.executable, "-m", "ds4gateway", "--config", cfg_path],
                            cwd=ROOT, env=env)
-    gw2 = None
+    procs = [gw1]
     try:
-        gw2 = asyncio.run(run_tests(cfg_path, state_dir))
+        asyncio.run(run_tests(cfg_path, state_dir, procs))
     finally:
-        cleanup(state_dir, [gw1, gw2])
+        cleanup(state_dir, procs)
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)
 

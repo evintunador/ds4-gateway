@@ -8,6 +8,7 @@
   ds4ctl swap-model             red/yellow model swap (edit config.toml first)
   ds4ctl deploy [...]           blue/green gateway deploy (tools/deploy.py)
   ds4ctl promote                make the live release the boot version
+  ds4ctl install-daemon         print (not run) the LaunchDaemon install commands
 
 Talks to the gateway admin API on localhost. Uses port 9001 (blue) by
 default, falling back to 9002 (green); override with --port or DS4CTL_PORT.
@@ -90,9 +91,22 @@ def main():
     dep = sub.add_parser("deploy")
     dep.add_argument("extra", nargs="*", help="passed through to tools/deploy.py")
     sub.add_parser("promote")
+    sub.add_parser("install-daemon")
     args = ap.parse_args()
 
     repo = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    if args.cmd == "install-daemon":
+        plist = os.path.join(repo, "launchd", "com.evintunador.ds4-gateway.plist")
+        print("The daemon is NOT installed automatically. Preconditions:")
+        print("  - `ds4ctl promote` has been run (current symlink exists)")
+        print("  - you are confident in the promoted release")
+        print("Then run:")
+        print(f"  sudo cp {plist} /Library/LaunchDaemons/")
+        print("  sudo launchctl bootstrap system /Library/LaunchDaemons/com.evintunador.ds4-gateway.plist")
+        print("To remove:")
+        print("  sudo launchctl bootout system/com.evintunador.ds4-gateway")
+        print("  sudo rm /Library/LaunchDaemons/com.evintunador.ds4-gateway.plist")
+        return
     if args.cmd in ("deploy", "promote"):
         extra = ["--promote"] if args.cmd == "promote" else args.extra
         os.execvp("uv", ["uv", "run", "--project", repo, "python",

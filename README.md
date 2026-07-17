@@ -60,7 +60,8 @@ Power states can be simulated on a live gateway via
 
 - ~~Stage 2~~ done: versioned releases, blue/green gateway deploys, red/yellow
   model swaps (`ds4ctl deploy / swap-model / promote`).
-- Stage 3: LaunchDaemon (written but not loaded until proven), memory watchdog.
+- ~~Stage 3~~ done: boot script + LaunchDaemon (written, installed only via
+  the printed `ds4ctl install-daemon` steps), memory watchdog.
 - Backlog: runtime & memory benchmark suite.
 - Stage 4: generalize for other operators — strip anything specific to this
   machine/owner into config + setup docs, so anyone can deploy this in front

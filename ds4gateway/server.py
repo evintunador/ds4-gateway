@@ -22,6 +22,7 @@ from .backend import ModelManager
 from .identity import TS_LOGIN_HEADER, identify
 from .power import PowerMonitor, PowerState
 from .scheduler import FairScheduler, QueueFull, QueueTimeout
+from .watchdog import Watchdog
 
 _FORWARD_REQ_HEADERS = {"content-type", "accept"}
 _SKIP_RESP_HEADERS = {"transfer-encoding", "connection", "content-length", "content-encoding"}
@@ -52,6 +53,12 @@ class Gateway:
             max_queued_per_user=cfg.get("scheduler", "max_queued_per_user", default=4),
             queue_timeout_s=cfg.get("scheduler", "queue_timeout_s", default=600),
         )
+        self.watchdog = Watchdog(
+            self,
+            interval_s=cfg.get("watchdog", "interval_s", default=30),
+            gateway_rss_mb=cfg.get("watchdog", "gateway_rss_mb", default=2048),
+            model_rss_mb=cfg.get("watchdog", "model_rss_mb", default=115000),
+        )
         self.session: aiohttp.ClientSession | None = None
         self.started_at = time.time()
         self._bg: list[asyncio.Task] = []
@@ -76,6 +83,7 @@ class Gateway:
         self.session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=None, sock_read=600))
         self._bg.append(asyncio.create_task(self.power.run()))
+        self._bg.append(asyncio.create_task(self.watchdog.run()))
         self._bg.append(asyncio.create_task(self._model_startup()))
 
     async def _model_startup(self):
@@ -115,6 +123,7 @@ class Gateway:
                       "min_battery_percent": self.power.min_percent},
             "backend": self.model.info(),
             "scheduler": self.sched.status(),
+            "watchdog": self.watchdog.info(),
             "owner": self.owner,
         })
 

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- NOT LOADED BY DEFAULT. Install deliberately with `ds4ctl install-daemon`
+     (prints the sudo commands; nothing here runs until you do).
+     Boots the PROMOTED release via the `current` symlink only. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.evintunador.ds4-gateway</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/evintunador/dev/ds4-gateway-deploy/current/tools/boot.sh</string>
+    </array>
+    <key>UserName</key>
+    <string>evintunador</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/evintunador</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- restart only on crash, and never more often than every 5 minutes:
+         a bad build must not hot-loop the 81GB model load -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>300</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/evintunador/dev/ds4-gateway-deploy/logs/boot.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/evintunador/dev/ds4-gateway-deploy/logs/boot.log</string>
+</dict>
+</plist>

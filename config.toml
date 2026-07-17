@@ -40,3 +40,8 @@ queue_timeout_s = 600
 
 [deploy]
 root = "~/dev/ds4-gateway-deploy"   # releases/, live and current symlinks
+
+[watchdog]
+interval_s = 30
+gateway_rss_mb = 2048     # gateway over this -> exit (launchd restarts, throttled)
+model_rss_mb = 115000     # ~112GB; model over this -> stop + disable, ds4ctl on to recover
