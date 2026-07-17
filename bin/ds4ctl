@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""Control the ds4 gateway.
+
+  ds4ctl status                 show power/gate/backend/queue state
+  ds4ctl on                     re-enable and reload the model
+  ds4ctl off                    stop the model server, free the RAM
+  ds4ctl off --for 2h           ...and auto-relaunch after 2h (also: 90m, 1h30m, 45s)
+
+Talks to the gateway admin API on localhost. Uses port 9001 (blue) by
+default, falling back to 9002 (green); override with --port or DS4CTL_PORT.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+
+PORTS = [9001, 9002]
+
+
+def parse_duration(s: str) -> float:
+    m = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?", s.strip())
+    if not m or not any(m.groups()):
+        sys.exit(f"ds4ctl: cannot parse duration '{s}' (examples: 2h, 90m, 1h30m, 45s)")
+    h, mi, se = (int(g) if g else 0 for g in m.groups())
+    return h * 3600 + mi * 60 + se
+
+
+def call(port: int, method: str, path: str, payload: dict | None = None):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}", method=method,
+        data=json.dumps(payload).encode() if payload is not None else None,
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read())
+
+
+def find_port(preferred: int | None):
+    candidates = [preferred] if preferred else PORTS
+    for port in candidates:
+        try:
+            return port, call(port, "GET", "/admin/status")
+        except (urllib.error.URLError, OSError):
+            continue
+    sys.exit(f"ds4ctl: no gateway responding on port(s) {candidates}")
+
+
+def print_status(s: dict):
+    p, b = s["power"], s["backend"]
+    gate = "OPEN" if p["serving_allowed"] else "CLOSED"
+    print(f"gateway    {s['color']}  up {s['uptime_s']:.0f}s  owner {s['owner']}")
+    print(f"power      {'AC' if p['on_ac'] else 'battery'} {p['percent']}%  "
+          f"remote gate {gate} (needs AC + >={p['min_battery_percent']}%)"
+          + ("  [OVERRIDE ACTIVE]" if p["override_active"] else ""))
+    line = f"backend    {b['state']}"
+    if b["pid"]:
+        line += f"  pid {b['pid']}"
+    if b["disabled"]:
+        line += "  DISABLED"
+        if b["disabled_until"]:
+            mins = (b["disabled_until"] - time.time()) / 60
+            line += f" (auto-on in {mins:.0f}m)"
+    print(line + f"  -> {b['base_url']}")
+    sched = s["scheduler"]
+    queued = ", ".join(f"{u}:{n}" for u, n in sched["queued"].items()) or "empty"
+    print(f"scheduler  busy: {sched['busy_user'] or 'idle'}  queued: {queued}")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="ds4ctl")
+    ap.add_argument("--port", type=int, default=int(os.environ.get("DS4CTL_PORT", 0)) or None)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("status")
+    sub.add_parser("on")
+    off = sub.add_parser("off")
+    off.add_argument("--for", dest="duration", default=None,
+                     help="auto re-enable after this long (2h, 90m, 1h30m)")
+    args = ap.parse_args()
+
+    port, status = find_port(args.port)
+    if args.cmd == "status":
+        print_status(status)
+    elif args.cmd == "on":
+        print("reloading model (this can take a few minutes)...")
+        call(port, "POST", "/admin/on")
+        print("model enabled and running")
+    elif args.cmd == "off":
+        payload = {}
+        if args.duration:
+            payload["duration_s"] = parse_duration(args.duration)
+        r = call(port, "POST", "/admin/off", payload)
+        until = r["backend"]["disabled_until"]
+        print("model stopped, RAM freed"
+              + (f"; auto-relaunch at {time.strftime('%H:%M', time.localtime(until))}"
+                 if until else ""))
+
+
+if __name__ == "__main__":
+    main()

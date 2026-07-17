@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+logs/
+state.json
+nohup.out
+.DS_Store

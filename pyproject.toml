@@ -1,0 +1,9 @@
+[project]
+name = "ds4-gateway"
+version = "0.1.0"
+description = "Gating, fairness, and deployment gateway for a local ds4-server (DeepSeek V4 Flash)"
+requires-python = ">=3.11"
+dependencies = ["aiohttp>=3.9"]
+
+[tool.uv]
+package = false
