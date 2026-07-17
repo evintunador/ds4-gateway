@@ -93,12 +93,17 @@ class ModelProcess:
         self.state = "starting"
         os.makedirs(os.path.dirname(self.log_file) or ".", exist_ok=True)
         log = open(self.log_file, "ab")
+        # per-port lock file: ds4's global single-instance lock would otherwise
+        # refuse the deliberate two-instance overlap during a red/yellow swap
+        env = {**os.environ,
+               "DS4_LOCK_FILE": str(self.run_dir / f"ds4-{self.port}.lock")}
         try:
             self.proc = await asyncio.create_subprocess_exec(
                 self.server_bin, "-m", self.model_file, *self.args,
                 "--host", self.host, "--port", str(self.port),
                 cwd=self.ds4_dir, stdout=log, stderr=asyncio.subprocess.STDOUT,
                 start_new_session=True,  # survive gateway death
+                env=env,
             )
         finally:
             log.close()

@@ -30,6 +30,10 @@ architectural changes.
 6. **`cwd` must be the ds4 checkout** when spawning ds4-server (Metal shader
    files resolve relative to it). `backend.py` passes `cwd=ds4_dir` for this
    reason; do not "simplify" it away.
+7. **ds4 has a global single-instance lock** (`/tmp/ds4.lock` by default;
+   found the hard way during the first live swap). The gateway sets
+   `DS4_LOCK_FILE` per port so the deliberate two-instance overlap of a
+   red/yellow swap is allowed while accidental doubles stay blocked per port.
 
 ## Identity model
 
