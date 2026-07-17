@@ -126,11 +126,24 @@ async def main_async(args):
         print(f"saved: {f}")
 
 
+def find_gateway():
+    import urllib.request
+    for port in (9001, 9002):
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/admin/status", timeout=3)
+            return f"http://127.0.0.1:{port}"
+        except OSError:
+            continue
+    raise SystemExit("no gateway responding on 9001/9002; pass --base-url")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base-url", default="http://127.0.0.1:9001")
+    ap.add_argument("--base-url", default=None)
     ap.add_argument("--timeout", type=float, default=600)
     args = ap.parse_args()
+    if args.base_url is None:
+        args.base_url = find_gateway()
     asyncio.run(main_async(args))
 
 
