@@ -1,7 +1,10 @@
 # ds4-gateway
 
-Gating, fairness, and deployment gateway for the local `ds4-server`
-(DeepSeek V4 Flash, `~/dev/ds4` — kept pristine, never modified by this project).
+Serves DeepSeek V4 Flash from this Mac to a handful of friends over
+Tailscale, with battery-aware gating, per-user fairness, zero-downtime
+deploys, and content-free usage metrics. The inference engine is a stock
+[antirez/ds4](https://github.com/antirez/ds4) checkout (`~/dev/ds4`, never
+modified); everything here is the layer around it.
 
 ```
 tailnet users ──> tailscale serve (HTTPS, injects Tailscale-User-Login)
@@ -10,62 +13,81 @@ tailnet users ──> tailscale serve (HTTPS, injects Tailscale-User-Login)
                   │  power gate: AC + battery >= 80%, owner always bypasses
                   │  WFQ scheduler: weighted turns on the serial backend
                         │
-                  ds4-server :8001/:8002 (red/yellow, stock binary, 81GB model)
+                  ds4-server :8001/:8002 (red/yellow, 81GB model,
+                                          256GB disk KV cache)
 ```
 
-## Running
+## For clients (friends on the tailnet)
+
+Point any OpenAI- or Anthropic-compatible SDK at
+`https://<machine>.<tailnet>.ts.net/v1`. Any non-empty API key works —
+identity comes from your Tailscale login, across all your devices. The
+optional `user` body field is a free label, not authentication.
+
+When the server says no, it means it:
+
+| Error | Meaning | What to do |
+|---|---|---|
+| `503 battery_gated` | host is off charger or under 80% | try later |
+| `503 manually_disabled` | owner turned it off (`resumes_at_epoch` if timed) | try later |
+| `503 model_loading` | model is starting up | retry in a minute |
+| `429 queue_full` | you already have several requests queued | slow down |
+| `504 queue_timeout` | your turn never came within the window | retry |
+
+Conversations are never written to disk as text; see the data-retention
+section of [docs/DESIGN.md](docs/DESIGN.md).
+
+## Everyday commands (owner)
 
 ```sh
-uv run python -m ds4gateway --config config.toml   # starts model too (autostart)
-tailscale serve --bg 9001                          # expose to the tailnet
+bin/ds4ctl status              # power / gate / backend / queues / swap progress
+bin/ds4ctl off [--for 2h]      # stop the model, free ~81GB; auto-relaunch timer optional
+bin/ds4ctl on                  # reload now
+bin/ds4ctl stats [--days 7]    # peak hours, per-user tokens (content-free)
+bin/ds4ctl weights [LOGIN N | LOGIN --clear]   # fairness weights, live, persistent
+bin/ds4ctl bench               # TTFT / decode-rate / footprint benchmark, saved as JSON
 ```
 
-Clients use any OpenAI/Anthropic-compatible SDK against
-`https://<machine>.<tailnet>.ts.net/v1/...`. No API keys — identity comes from
-Tailscale. The optional `user` field in request bodies is a self-reported
-label only; fairness weights key on the Tailscale login (`[scheduler.weights]`
-in `config.toml`).
-
-## ds4ctl
+## Shipping changes
 
 ```sh
-ds4ctl status        # power / gate / backend / queues
-ds4ctl off           # stop ds4-server, free the ~81GB (gaming mode)
-ds4ctl off --for 2h  # ...and auto-relaunch afterwards (persists across gateway restarts)
-ds4ctl on            # reload the model now
+bin/ds4ctl deploy       # gateway blue/green: ship committed HEAD, zero downtime
+bin/ds4ctl swap-model   # model red/yellow: apply config.toml model changes, zero downtime
+bin/ds4ctl promote      # bless the live release as the boot version (manual on purpose)
+bin/ds4ctl deploy --release ~/dev/ds4-gateway-deploy/releases/<dir>   # rollback
 ```
 
-## Behavior summary
+Deploys never change what boots; only `promote` moves the `current` symlink.
 
-- Off charger or battery < 80%: non-owner requests get `503 battery_gated`;
-  the owner (tailscale login in `[owner]`) is always served; model stays loaded.
-- `ds4ctl off`: model process stops entirely (RAM freed); everyone, including
-  the owner, gets `503 manually_disabled` until `on` or the timer fires.
-- One request runs at a time (ds4-server has a single graph worker); queued
-  requests are dispatched by weighted fair queuing with a small same-user
-  stickiness bonus for KV prefix-cache reuse.
-- Admin API (`/admin/*`) accepts the owner's tailscale identity or bare
-  loopback connections (that's how `ds4ctl` talks to it).
+## If the Mac rebooted
+
+```sh
+~/dev/ds4-gateway-deploy/current/tools/boot.sh
+```
+
+Or install the LaunchDaemon for automatic boot: `bin/ds4ctl install-daemon`
+prints the sudo commands (it is never installed automatically).
 
 ## Testing
 
 ```sh
-uv run python tests/test_e2e.py   # mock backend + real gateway, no model load
+uv run python tests/test_e2e.py        # gating/fairness/metrics vs mock backend
+uv run python tests/test_lifecycle.py  # spawn/adopt/swap/handoff/watchdog vs fake server
+uv run python tools/simulate.py --duration 60   # live traffic simulator
 ```
 
-Power states can be simulated on a live gateway via
-`POST /admin/power_override {"on_ac": false, "percent": 50}` / `{"clear": true}`.
+## More
+
+- [docs/OPERATIONS.md](docs/OPERATIONS.md) — full runbook: topology, deploys,
+  onboarding, KV-cache purge, emergency stops.
+- [docs/DESIGN.md](docs/DESIGN.md) — why it's built this way: hardware/engine
+  constraints, switch mechanics, data retention. Agents/LLM devs: start with
+  [CLAUDE.md](CLAUDE.md).
 
 ## Roadmap
 
-- ~~Stage 2~~ done: versioned releases, blue/green gateway deploys, red/yellow
-  model swaps (`ds4ctl deploy / swap-model / promote`).
-- ~~Stage 3~~ done: boot script + LaunchDaemon (written, installed only via
-  the printed `ds4ctl install-daemon` steps), memory watchdog.
-- ~~Stage 3.5~~ done: content-free usage metrics (`ds4ctl stats`), live
-  fairness-weight updates (`ds4ctl weights`), benchmark suite (`ds4ctl bench`).
 - Stage 4: generalize for other operators — strip anything specific to this
-  machine/owner into config + setup docs, so anyone can deploy this in front
-  of their own ds4-server.
-- v2: continuous batching in a fork of `antirez/ds4` (clone to
-  `~/dev/ds4_custom`), or port the engine into exo; disk-backed KV queue.
+  machine/owner into config + setup docs.
+- v2: continuous batching in a fork of antirez/ds4 (clone to
+  `~/dev/ds4_custom`), or port the engine into exo; per-user in-RAM KV
+  sessions come with it.

@@ -104,10 +104,13 @@ surprise-reload the model.
   whatever color was live pre-reboot.
 - KeepAlive only on crash + 5-minute throttle: the owner's explicit fear is
   a bad build hot-looping an 81GB model load at startup.
-- Watchdog (in-gateway): model RSS over `[watchdog].model_rss_mb` -> stop +
-  persistent disable (recover with `ds4ctl on`); gateway RSS over its limit
-  -> exit(70). The watchdog can fire while the model is still loading —
-  that is intentional (runaway load) and the lifecycle test covers it.
+- Watchdog (in-gateway): model dirty phys footprint over
+  `[watchdog].model_footprint_mb` -> stop + persistent disable (recover with
+  `ds4ctl on`); gateway RSS over its limit -> exit(70). Footprint, not ps
+  rss: mmap'd weights are clean reclaimable pages (~130MB rss for an 81GB
+  model), while KV/Metal buffers and real leaks are dirty footprint (~6GB
+  healthy). The watchdog can fire while the model is still loading — that
+  is intentional (runaway load) and the lifecycle test covers it.
 
 ## v2 roadmap notes (owner-confirmed facts)
 
@@ -116,8 +119,10 @@ surprise-reload the model.
   small. Plan: fork antirez/ds4 (clone to `~/dev/ds4_custom`, keep `~/dev/ds4`
   pristine as fallback), reference implementation: `~/repos/evintunador/exo`.
   Alternative path: port the ds4 engine into exo and switch to exo entirely.
-- Idea: disk-backed queue of KV caches (e.g. 512GB budget) if restoring from
-  SSD beats re-prefill.
+- ~~Disk-backed KV cache~~ shipped 2026-07-17 via upstream `--kv-disk-dir`
+  (256GB): restoring beats re-prefill by ~165x on TTFT for a re-sent 1k
+  prompt (0.02s vs 3.3s). What v2 still adds: multiple in-RAM KV sessions so
+  interleaved users don't even pay the disk restore.
 
 ## Data retention (owner's explicit requirement)
 

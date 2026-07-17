@@ -1,13 +1,15 @@
 # Operations runbook
 
-## Current deployment (stage 1, manual — no boot persistence yet)
+## Topology
 
 | Component | Where | Notes |
 |---|---|---|
-| gateway (blue) | 127.0.0.1:9001 | `uv run python -m ds4gateway --config config.toml` from the repo root |
-| ds4-server | 127.0.0.1:8001 | spawned/supervised by the gateway; do not start by hand while the gateway manages it |
-| tailscale serve | `https://<machine>.<tailnet>.ts.net` → :9001 | persists across reboots on its own |
-| logs | `logs/gateway.log`, `logs/ds4-server.log` | |
+| gateway | 127.0.0.1:9001 (blue) or :9002 (green) | one active at a time; find it with `ds4ctl status` or `tailscale serve status` |
+| ds4-server | 127.0.0.1:8001 (red) or :8002 (yellow) | supervised/adopted by the gateway — never start by hand |
+| tailscale serve | `https://<machine>.<tailnet>.ts.net` → active gateway | persists across reboots on its own |
+| releases | `~/dev/ds4-gateway-deploy/releases/<ts>-<sha>/` | `live` = serving now, `current` = boots (promote-gated) |
+| shared state | `~/.local/state/ds4-gateway/` | state.json, pidfiles, weights.json, usage.jsonl, kv-<port>/, benchmarks/ |
+| logs | `<release>/logs/gateway.log`, `<release>/logs/ds4-server.log` | per-release |
 
 **After a reboot** — if the LaunchDaemon is installed, nothing: it runs
 `current/tools/boot.sh`, which starts the promoted release in the blue slot
