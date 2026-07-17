@@ -119,6 +119,17 @@ surprise-reload the model.
 - Idea: disk-backed queue of KV caches (e.g. 512GB budget) if restoring from
   SSD beats re-prefill.
 
+## Data retention (owner's explicit requirement)
+
+Conversation content is NEVER persisted. It exists only in ds4-server's
+in-RAM KV cache (overwritten as conversations interleave, gone at process
+exit). Enforced by construction: the proxy never logs bodies; ds4-server's
+`--trace` and `--kv-disk-dir` flags are never passed. The usage log
+(state_dir/usage.jsonl) records only user, timestamps, status, timings, and
+token counts — the e2e suite asserts no content leaks into it. Streamed
+responses omit `usage`, so their completion tokens are estimated from SSE
+chunk counts and flagged `estimated`.
+
 ## Error codes clients may see
 
 `503 battery_gated` (retry when host is charging), `503 manually_disabled`

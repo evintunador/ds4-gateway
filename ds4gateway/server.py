@@ -20,6 +20,7 @@ from aiohttp import web
 
 from .backend import ModelManager
 from .identity import TS_LOGIN_HEADER, identify
+from .metrics import INFERENCE_PATHS, UsageLog
 from .power import PowerMonitor, PowerState
 from .scheduler import FairScheduler, QueueFull, QueueTimeout
 from .watchdog import Watchdog
@@ -59,10 +60,24 @@ class Gateway:
             gateway_rss_mb=cfg.get("watchdog", "gateway_rss_mb", default=2048),
             model_rss_mb=cfg.get("watchdog", "model_rss_mb", default=115000),
         )
+        self.usage = UsageLog(
+            run_dir / "usage.jsonl",
+            enabled=cfg.get("metrics", "enabled", default=True))
+        self.run_dir = run_dir
+        self._load_weight_overrides()
         self.session: aiohttp.ClientSession | None = None
         self.started_at = time.time()
         self._bg: list[asyncio.Task] = []
         self._swap_task: asyncio.Task | None = None
+
+    def _load_weight_overrides(self):
+        self._weight_overrides = {}
+        try:
+            self._weight_overrides = json.loads(
+                (self.run_dir / "weights.json").read_text())
+            self.sched.weights.update(self._weight_overrides)
+        except (OSError, ValueError):
+            pass
 
     # ---- app wiring ------------------------------------------------------
 
@@ -74,6 +89,8 @@ class Gateway:
         app.router.add_post("/admin/power_override", self.h_power_override)
         app.router.add_post("/admin/model_swap", self.h_model_swap)
         app.router.add_post("/admin/shutdown", self.h_shutdown)
+        app.router.add_get("/admin/weights", self.h_weights)
+        app.router.add_post("/admin/weights", self.h_weights)
         app.router.add_route("*", "/{path:.*}", self.h_proxy)
         app.on_startup.append(self._startup)
         app.on_cleanup.append(self._cleanup)
@@ -125,7 +142,35 @@ class Gateway:
             "scheduler": self.sched.status(),
             "watchdog": self.watchdog.info(),
             "owner": self.owner,
+            "state_dir": str(self.run_dir),
+            "usage_log": str(self.usage.path),
         })
+
+    async def h_weights(self, request):
+        if not self._admin_allowed(request):
+            return _error(403, "forbidden", "admin access is owner-only")
+        if request.method == "POST":
+            data = await request.json()
+            login = data["login"]
+            if data.get("clear"):
+                self._weight_overrides.pop(login, None)
+                cfg_w = self.cfg.get("scheduler", "weights", default={}).get(login)
+                if cfg_w is not None:
+                    self.sched.weights[login] = cfg_w
+                else:
+                    self.sched.weights.pop(login, None)
+            else:
+                w = float(data["weight"])
+                self._weight_overrides[login] = w
+                self.sched.weights[login] = w
+            try:
+                (self.run_dir / "weights.json").write_text(
+                    json.dumps(self._weight_overrides))
+            except OSError:
+                pass
+        return web.json_response({"weights": self.sched.weights,
+                                  "overrides": self._weight_overrides,
+                                  "default": self.sched.default_weight})
 
     async def h_on(self, request):
         if not self._admin_allowed(request):
@@ -205,6 +250,7 @@ class Gateway:
     # ---- proxy -----------------------------------------------------------
 
     async def h_proxy(self, request: web.Request):
+        arrived = time.time()
         body = await request.read()
         body_user = None
         if body:
@@ -216,55 +262,109 @@ class Gateway:
                 pass
         login, source = await identify(request, body_user)
         is_owner = login == self.owner or source == "loopback"
+        is_inference = request.path in INFERENCE_PATHS and request.method == "POST"
+
+        def rejected(status, code, message, **extra):
+            if is_inference:
+                self.usage.record(user=login, path=request.path,
+                                  status=status, code=code)
+            return _error(status, code, message, **extra)
 
         if self.model.disabled:
             extra = {}
             if self.model.disabled_until:
                 extra["resumes_at_epoch"] = self.model.disabled_until
-            return _error(503, "manually_disabled",
-                          "the model server is manually disabled", **extra)
+            return rejected(503, "manually_disabled",
+                            "the model server is manually disabled", **extra)
         if not is_owner and not self.power.serving_allowed:
             p = self.power.effective()
-            return _error(
+            return rejected(
                 503, "battery_gated",
                 f"server is available only on AC power with battery >= "
                 f"{self.power.min_percent}% (currently "
                 f"{'AC' if p.on_ac else 'battery'}, {p.percent}%); try again later")
         if self.model.active.state == "starting":
-            return _error(503, "model_loading", "model is loading; try again shortly")
+            return rejected(503, "model_loading", "model is loading; try again shortly")
         if self.model.active.state != "running":
-            return _error(503, "model_stopped", "model server is not running")
+            return rejected(503, "model_stopped", "model server is not running")
 
         try:
             await self.sched.acquire(login)
         except QueueFull:
-            return _error(429, "queue_full",
-                          f"user '{login}' already has the maximum number of queued requests")
+            return rejected(429, "queue_full",
+                            f"user '{login}' already has the maximum number of queued requests")
         except QueueTimeout:
-            return _error(504, "queue_timeout", "request timed out waiting for a turn")
+            return rejected(504, "queue_timeout", "request timed out waiting for a turn")
+        wait_s = time.time() - arrived
         try:
-            return await self._forward(request, body)
+            return await self._forward(request, body, login, arrived, wait_s)
         finally:
             self.sched.release(login)
 
-    async def _forward(self, request: web.Request, body: bytes):
+    async def _forward(self, request: web.Request, body: bytes,
+                       login: str = "?", arrived: float | None = None,
+                       wait_s: float = 0.0):
         # resolve the active backend at dispatch time — a red/yellow swap may
         # have flipped the pointer while this request was queued
         url = self.model.active.base_url + request.path_qs
         headers = {k: v for k, v in request.headers.items()
                    if k.lower() in _FORWARD_REQ_HEADERS}
+        is_inference = request.path in INFERENCE_PATHS and request.method == "POST"
+        arrived = arrived or time.time()
+        t0 = time.time()
+        ttft = None
+        buf = b""
+        sse_chunks = 0
+        is_sse = False
         try:
             async with self.session.request(
                     request.method, url, headers=headers,
                     data=body if body else None) as upstream:
+                is_sse = "text/event-stream" in upstream.headers.get("Content-Type", "")
                 resp = web.StreamResponse(status=upstream.status)
                 for k, v in upstream.headers.items():
                     if k.lower() not in _SKIP_RESP_HEADERS:
                         resp.headers[k] = v
                 await resp.prepare(request)
                 async for chunk in upstream.content.iter_any():
+                    if ttft is None:
+                        ttft = time.time() - t0
+                    if is_inference:
+                        if is_sse:
+                            sse_chunks += chunk.count(b'"chat.completion.chunk"')
+                        elif len(buf) < 262144:
+                            buf += chunk
                     await resp.write(chunk)
                 await resp.write_eof()
+                if is_inference:
+                    self._record_usage(request.path, login, upstream.status,
+                                       arrived, wait_s, ttft, is_sse, buf, sse_chunks)
                 return resp
         except aiohttp.ClientError as e:
+            if is_inference:
+                self.usage.record(user=login, path=request.path, status=502,
+                                  code="upstream_error",
+                                  latency_s=round(time.time() - arrived, 3))
             return _error(502, "upstream_error", f"ds4-server request failed: {e}")
+
+    def _record_usage(self, path, login, status, arrived, wait_s, ttft,
+                      is_sse, buf, sse_chunks):
+        pt = ct = None
+        estimated = False
+        if not is_sse and buf:
+            try:
+                u = json.loads(buf).get("usage") or {}
+                pt = u.get("prompt_tokens", u.get("input_tokens"))
+                ct = u.get("completion_tokens", u.get("output_tokens"))
+            except (ValueError, AttributeError):
+                pass
+        elif is_sse and sse_chunks:
+            ct = max(sse_chunks - 1, 0)  # final chunk carries no token
+            estimated = True
+        self.usage.record(
+            user=login, path=path, status=status,
+            latency_s=round(time.time() - arrived, 3),
+            wait_s=round(wait_s, 3),
+            ttft_s=round(ttft, 3) if ttft is not None else None,
+            stream=is_sse, prompt_tokens=pt, completion_tokens=ct,
+            estimated=estimated)

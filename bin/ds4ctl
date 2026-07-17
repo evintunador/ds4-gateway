@@ -9,6 +9,10 @@
   ds4ctl deploy [...]           blue/green gateway deploy (tools/deploy.py)
   ds4ctl promote                make the live release the boot version
   ds4ctl install-daemon         print (not run) the LaunchDaemon install commands
+  ds4ctl stats [--days 7]       aggregate usage: peak hours, tokens, per-user
+  ds4ctl weights                show fairness weights
+  ds4ctl weights LOGIN N        set a user's weight live (persists); --clear resets
+  ds4ctl bench [...]            runtime benchmark (tools/bench.py)
 
 Talks to the gateway admin API on localhost. Uses port 9001 (blue) by
 default, falling back to 9002 (green); override with --port or DS4CTL_PORT.
@@ -78,6 +82,69 @@ def print_status(s: dict):
     print(f"scheduler  busy: {sched['busy_user'] or 'idle'}  queued: {queued}")
 
 
+def print_stats(status, days):
+    path = status.get("usage_log")
+    if not path:
+        sys.exit("gateway does not report a usage log (pre-3.5 release?)")
+    since = time.time() - days * 86400
+    events = []
+    for p in (path + ".1", path):
+        try:
+            with open(p) as f:
+                for line in f:
+                    try:
+                        e = json.loads(line)
+                    except ValueError:
+                        continue
+                    if e.get("ts", 0) >= since:
+                        events.append(e)
+        except OSError:
+            continue
+    if not events:
+        print(f"no usage recorded in the last {days:g} days")
+        return
+
+    users = {}
+    hours = [[0, 0] for _ in range(24)]  # per local hour-of-day: [reqs, completion tokens]
+    for e in events:
+        u = users.setdefault(e.get("user", "?"),
+                             {"reqs": 0, "ok": 0, "gated": 0, "throttled": 0,
+                              "pt": 0, "ct": 0, "est": False})
+        u["reqs"] += 1
+        st = e.get("status", 0)
+        if 200 <= st < 300:
+            u["ok"] += 1
+        elif e.get("code") in ("battery_gated", "manually_disabled"):
+            u["gated"] += 1
+        elif st == 429:
+            u["throttled"] += 1
+        u["pt"] += e.get("prompt_tokens") or 0
+        u["ct"] += e.get("completion_tokens") or 0
+        u["est"] = u["est"] or e.get("estimated", False)
+        h = time.localtime(e["ts"]).tm_hour
+        hours[h][0] += 1
+        hours[h][1] += e.get("completion_tokens") or 0
+
+    print(f"== usage, last {days:g} days ({len(events)} requests) ==")
+    print(f"{'user':<28} {'reqs':>6} {'ok':>6} {'gated':>6} {'429':>5} "
+          f"{'prompt tok':>11} {'compl tok':>10}")
+    for login, u in sorted(users.items(), key=lambda kv: -kv[1]["reqs"]):
+        est = "~" if u["est"] else " "
+        print(f"{login:<28} {u['reqs']:>6} {u['ok']:>6} {u['gated']:>6} "
+              f"{u['throttled']:>5} {u['pt']:>11} {est}{u['ct']:>9}")
+    print("\nby local hour of day (# = requests):")
+    peak = max(r for r, _ in hours) or 1
+    for h in range(24):
+        r, ct = hours[h]
+        bar = "#" * round(20 * r / peak)
+        tok = f"  {ct} tok" if ct else ""
+        print(f"  {h:02d}  {bar:<20} {r}{tok}" if r else f"  {h:02d}")
+    top = sorted(range(24), key=lambda h: -hours[h][0])[:3]
+    print("peak hours: " + ", ".join(f"{h:02d}:00 ({hours[h][0]} reqs)"
+                                     for h in top if hours[h][0]))
+    print("('~' = streamed responses; completion tokens estimated from chunk counts)")
+
+
 def main():
     ap = argparse.ArgumentParser(prog="ds4ctl")
     ap.add_argument("--port", type=int, default=int(os.environ.get("DS4CTL_PORT", 0)) or None)
@@ -92,9 +159,20 @@ def main():
     dep.add_argument("extra", nargs="*", help="passed through to tools/deploy.py")
     sub.add_parser("promote")
     sub.add_parser("install-daemon")
+    stats = sub.add_parser("stats")
+    stats.add_argument("--days", type=float, default=7)
+    wts = sub.add_parser("weights")
+    wts.add_argument("login", nargs="?")
+    wts.add_argument("weight", nargs="?", type=float)
+    wts.add_argument("--clear", action="store_true")
+    bench = sub.add_parser("bench")
+    bench.add_argument("extra", nargs="*", help="passed through to tools/bench.py")
     args = ap.parse_args()
 
     repo = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    if args.cmd == "bench":
+        os.execvp("uv", ["uv", "run", "--project", repo, "python",
+                         os.path.join(repo, "tools", "bench.py"), *args.extra])
     if args.cmd == "install-daemon":
         plist = os.path.join(repo, "launchd", "com.evintunador.ds4-gateway.plist")
         print("The daemon is NOT installed automatically. Preconditions:")
@@ -144,6 +222,22 @@ def main():
                 break
             if state.startswith("FAILED"):
                 sys.exit(f"swap failed: {state}")
+    elif args.cmd == "weights":
+        if args.login and args.clear:
+            r = call(port, "POST", "/admin/weights", {"login": args.login, "clear": True})
+        elif args.login and args.weight is not None:
+            r = call(port, "POST", "/admin/weights",
+                     {"login": args.login, "weight": args.weight})
+        elif args.login:
+            sys.exit("usage: ds4ctl weights LOGIN N   (or LOGIN --clear)")
+        else:
+            r = call(port, "GET", "/admin/weights")
+        print(f"default weight: {r['default']}")
+        for login, w in sorted(r["weights"].items()):
+            mark = "  (runtime override)" if login in r.get("overrides", {}) else ""
+            print(f"  {login}: {w}{mark}")
+    elif args.cmd == "stats":
+        print_stats(status, args.days)
 
 
 if __name__ == "__main__":

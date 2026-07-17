@@ -41,6 +41,9 @@ queue_timeout_s = 600
 [deploy]
 root = "~/dev/ds4-gateway-deploy"   # releases/, live and current symlinks
 
+[metrics]
+enabled = true   # content-free usage log (tokens/timings only) in state_dir/usage.jsonl
+
 [watchdog]
 interval_s = 30
 gateway_rss_mb = 2048     # gateway over this -> exit (launchd restarts, throttled)

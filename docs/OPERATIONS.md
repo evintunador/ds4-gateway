@@ -63,6 +63,19 @@ Release layout under `~/dev/ds4-gateway-deploy/`: `releases/<ts>-<sha>/`
 `current` -> what the LaunchDaemon will boot (moves ONLY on promote).
 A deploy that fails health checks leaves the old gateway untouched.
 
+## Usage, weights, benchmarks (stage 3.5)
+
+```sh
+bin/ds4ctl stats --days 7        # peak hours, tokens per user (content-free)
+bin/ds4ctl weights               # show fairness weights
+bin/ds4ctl weights alice@github 2    # set live, persists across restarts
+bin/ds4ctl weights alice@github --clear
+bin/ds4ctl bench                 # runtime benchmark; saves JSON under state_dir/benchmarks/
+```
+
+Runtime weight changes persist in `state_dir/weights.json` and shadow
+`config.toml` values until cleared.
+
 ## Simulating conditions on a live gateway
 
 ```sh

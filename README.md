@@ -62,7 +62,8 @@ Power states can be simulated on a live gateway via
   model swaps (`ds4ctl deploy / swap-model / promote`).
 - ~~Stage 3~~ done: boot script + LaunchDaemon (written, installed only via
   the printed `ds4ctl install-daemon` steps), memory watchdog.
-- Backlog: runtime & memory benchmark suite.
+- ~~Stage 3.5~~ done: content-free usage metrics (`ds4ctl stats`), live
+  fairness-weight updates (`ds4ctl weights`), benchmark suite (`ds4ctl bench`).
 - Stage 4: generalize for other operators — strip anything specific to this
   machine/owner into config + setup docs, so anyone can deploy this in front
   of their own ds4-server.

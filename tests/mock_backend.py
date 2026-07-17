@@ -37,7 +37,8 @@ async def chat(request):
             await resp.write_eof()
             return resp
         return web.json_response({"choices": [{"message": {
-            "role": "assistant", "content": f"mock reply to {body.get('user', '?')}"}}]})
+            "role": "assistant", "content": f"mock reply to {body.get('user', '?')}"}}],
+            "usage": {"prompt_tokens": 7, "completion_tokens": 5}})
     finally:
         state["active"] -= 1
 

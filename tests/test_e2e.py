@@ -168,6 +168,38 @@ async def run_tests():
             check("SSE stream proxied", r.status == 200 and "data: [DONE]" in text,
                   (r.status, text[:120]))
 
+        print("== usage metrics ==")
+        st, body = await admin(s, "GET", "/admin/status")
+        events = []
+        with open(body["usage_log"]) as f:
+            for line in f:
+                events.append(json.loads(line))
+        check("usage events recorded", len(events) > 10, len(events))
+        with_tokens = [e for e in events if e.get("prompt_tokens")]
+        check("token counts captured (non-stream)",
+              with_tokens and with_tokens[0]["prompt_tokens"] == 7, with_tokens[:1])
+        check("no message content in usage log",
+              all("content" not in json.dumps(e) and "hi" != e.get("messages")
+                  and "messages" not in e for e in events))
+        gated = [e for e in events if e.get("code") == "battery_gated"]
+        check("gate rejections recorded", len(gated) >= 1, len(gated))
+        check("identities recorded", any(e.get("user") == FRIEND for e in events))
+
+        print("== weights hot-reload ==")
+        st, body = await admin(s, "POST", "/admin/weights",
+                               {"login": FRIEND, "weight": 9})
+        check("weight set live", st == 200 and body["weights"][FRIEND] == 9, body)
+        st, body = await admin(s, "GET", "/admin/weights")
+        check("weight visible", body["weights"].get(FRIEND) == 9
+              and FRIEND in body["overrides"], body)
+        st, body = await admin(s, "POST", "/admin/weights",
+                               {"login": FRIEND, "clear": True})
+        check("weight cleared", FRIEND not in body["weights"]
+              and FRIEND not in body["overrides"], body)
+        async with s.post(f"{GW}/admin/weights", headers=as_user(FRIEND),
+                          json={"login": FRIEND, "weight": 99}) as r:
+            check("friend cannot set weights", r.status == 403, r.status)
+
 
 def wait_http(url, timeout=15):
     import urllib.request

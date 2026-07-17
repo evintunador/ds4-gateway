@@ -1,0 +1,133 @@
+"""Runtime & memory benchmark for the gateway + ds4-server stack.
+
+Measures, per scenario: exact token counts and total latency (one
+non-streamed request) plus TTFT and decode rate (one streamed request).
+The cached scenario re-sends the previous prompt to show the KV
+prefix-cache benefit; uncached prompts start with a unique nonce so the
+shared prefix cache can't help. Model/gateway RSS sampled before and after.
+
+Results print as a table and are saved (JSON) under <state_dir>/benchmarks/
+for tracking regressions across model or engine versions.
+
+Run on the gateway machine:  ds4ctl bench   (or uv run python tools/bench.py)
+"""
+
+import argparse
+import asyncio
+import json
+import random
+import subprocess
+import time
+from pathlib import Path
+
+import aiohttp
+
+WORDS = ("ocean gradient harbor lantern quantum meadow copper drift signal "
+         "timber orbit velvet canyon ember glacier prism").split()
+
+
+def make_prompt(n_tokens: int, nonce: str) -> str:
+    # ~1 token per common word; nonce first so the shared KV prefix cache
+    # cannot reuse anything across "uncached" runs
+    words = [nonce] + [WORDS[i % len(WORDS)] for i in range(max(n_tokens - 20, 1))]
+    return ("[" + " ".join(words) + "] Summarize the word list above in one "
+            "short sentence.")
+
+
+def rss_mb(pid):
+    try:
+        out = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)],
+                             capture_output=True, text=True).stdout.strip()
+        return round(int(out) / 1024) if out else None
+    except (ValueError, OSError):
+        return None
+
+
+async def run_once(s, base, prompt, max_tokens, stream):
+    payload = {"model": "deepseek-v4-flash", "max_tokens": max_tokens,
+               "stream": stream,
+               "messages": [{"role": "user", "content": prompt}]}
+    t0 = time.time()
+    async with s.post(f"{base}/v1/chat/completions", json=payload) as r:
+        if r.status != 200:
+            raise RuntimeError(f"status {r.status}: {await r.text()}")
+        if not stream:
+            body = await r.json()
+            u = body.get("usage", {})
+            return {"latency_s": time.time() - t0,
+                    "prompt_tokens": u.get("prompt_tokens"),
+                    "completion_tokens": u.get("completion_tokens")}
+        ttft = None
+        chunks = 0
+        async for chunk in r.content.iter_any():
+            if ttft is None:
+                ttft = time.time() - t0
+            chunks += chunk.count(b'"chat.completion.chunk"')
+        total = time.time() - t0
+        decode = (chunks - 1) / (total - ttft) if chunks > 1 and total > ttft else None
+        return {"latency_s": total, "ttft_s": ttft, "chunks": chunks,
+                "decode_tok_s": decode}
+
+
+async def main_async(args):
+    scenarios = [
+        ("short 64/64", 64, 64),
+        ("medium 1k/128", 1000, 128),
+        ("long 8k/128", 8000, 128),
+    ]
+    results = {"t": time.time(), "scenarios": {}}
+    timeout = aiohttp.ClientTimeout(total=args.timeout)
+    async with aiohttp.ClientSession(timeout=timeout) as s:
+        async with s.get(f"{args.base_url}/admin/status") as r:
+            st = await r.json()
+        model_pid = st["backend"]["pid"]
+        state_dir = st.get("state_dir")
+        results["rss_before_mb"] = rss_mb(model_pid)
+        results["backend"] = st["backend"]["base_url"]
+
+        cached_prompt = None
+        for name, ptok, mtok in scenarios:
+            prompt = make_prompt(ptok, nonce=f"bench{random.randrange(1e9)}")
+            if ptok == 1000:
+                cached_prompt = prompt
+            exact = await run_once(s, args.base_url, prompt, mtok, stream=False)
+            streamed = await run_once(s, args.base_url, prompt + " (again)",
+                                      mtok, stream=True)
+            results["scenarios"][name] = {"exact": exact, "streamed": streamed}
+            d = streamed["decode_tok_s"]
+            decode = f"{d:.1f}" if d else "?"
+            print(f"{name:<16} prompt={exact['prompt_tokens']:>5} tok  "
+                  f"total={exact['latency_s']:.2f}s  "
+                  f"ttft={streamed['ttft_s']:.2f}s  decode={decode} tok/s")
+
+        # cached: identical 1k prompt again — prefix cache should crush TTFT
+        c = await run_once(s, args.base_url, cached_prompt, 128, stream=True)
+        results["scenarios"]["cached 1k/128"] = {"streamed": c}
+        d = c["decode_tok_s"]
+        decode = f"{d:.1f}" if d else "?"
+        print(f"{'cached 1k/128':<16} {'(same prompt)':>16}  "
+              f"total={c['latency_s']:.2f}s  ttft={c['ttft_s']:.2f}s  "
+              f"decode={decode} tok/s")
+
+        results["rss_after_mb"] = rss_mb(model_pid)
+        print(f"model rss: {results['rss_before_mb']} -> "
+              f"{results['rss_after_mb']} MB")
+
+    if state_dir:
+        out = Path(state_dir) / "benchmarks"
+        out.mkdir(exist_ok=True)
+        f = out / f"bench-{time.strftime('%Y%m%d-%H%M%S')}.json"
+        f.write_text(json.dumps(results, indent=2))
+        print(f"saved: {f}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--base-url", default="http://127.0.0.1:9001")
+    ap.add_argument("--timeout", type=float, default=600)
+    args = ap.parse_args()
+    asyncio.run(main_async(args))
+
+
+if __name__ == "__main__":
+    main()
